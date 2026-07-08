@@ -1,0 +1,203 @@
+services:
+  # 1. Base de datos para el AuthService (.NET)
+  restaurante-db:
+    image: postgres:15-alpine
+    container_name: restaurante-db
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: admin
+      POSTGRES_DB: restaurante_auth_db
+    ports:
+      - "5432:5432"
+    volumes:
+      - restaurante_db_data:/var/lib/postgresql/data
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U postgres" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 40s
+ 
+  # 2. Base de datos para Server Admin (Node.js)
+  mongo-db:
+    image: mongo:latest
+    container_name: restaurante-server-admin-mongo
+    ports:
+      - "27017:27017"
+    volumes:
+      - restaurante_mongo_data:/data/db
+    healthcheck:
+      test: [ "CMD", "mongosh", "--eval", "db.runCommand('ping')" ]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+ 
+  # 3. Microservicio de Autenticacion (.NET)
+  restaurante-auth-service:
+    build:
+      context: ../Restaurante-AuthService/Restaurante.AuthService
+      dockerfile: Dockerfile
+    container_name: restaurante-auth-service
+    ports:
+      - "5065:8080"
+    environment:
+      - ASPNETCORE_ENVIRONMENT=Production
+      - ConnectionStrings__PostgresConnection=Host=restaurante-db;Database=restaurante_auth_db;Username=postgres;Password=admin
+      - Jwt__Key=Restaurante_Super_Secret_Key_2026_DotNet8
+      - Jwt__Issuer=auth-service
+      - Jwt__Audience=restaurante-app
+      - SeedSettings__AdminPassword=Admin1234!
+      - SmtpSettings__Enabled=true
+      - SmtpSettings__Host=smtp.gmail.com
+      - SmtpSettings__Port=587
+      - SmtpSettings__Username=olivermerida765@gmail.com
+      - SmtpSettings__Password=TU_PASSWORD_DE_APP_GMAIL
+      - SmtpSettings__FromEmail=olivermerida765@gmail.com
+      - SmtpSettings__FromName=Gestor Restaurante
+      - SmtpSettings__UseFallback=true
+      - AppSettings__FrontendUrl=http://localhost:5173
+      - CorsSettings_AllowedOrigins_0=http://localhost:5173
+      - CorsSettings_AllowedOrigins_1=http://localhost:3001
+    depends_on:
+      restaurante-db:
+        condition: service_healthy
+ 
+  # 3.5. Microservicio de Autenticacion (Node.js)
+  restaurante-auth-node:
+    build:
+      context: ../Restaurante-auth-node
+      dockerfile: Dockerfile
+    container_name: restaurante-auth-node
+    ports:
+      - "3007:3007"
+    environment:
+      - NODE_ENV=production
+      - PORT=3007
+      - DB_HOST=restaurante-db
+      - DB_PORT=5432
+      - DB_NAME=restaurante_auth_db
+      - DB_USERNAME=postgres
+      - DB_PASSWORD=admin
+      - JWT_SECRET=Restaurante_Super_Secret_Key_2026_DotNet8
+      - JWT_EXPIRES_IN=8h
+      - JWT_REFRESH_EXPIRES_IN=30d
+      - JWT_ISSUER=auth-service
+      - JWT_AUDIENCE=restaurante-app
+      - ADMIN_SERVICE_URL=http://restaurante-server-admin:3001
+      - CLOUDINARY_CLOUD_NAME=dueikakf8
+      - CLOUDINARY_API_KEY=TU_CLOUDINARY_API_KEY
+      - CLOUDINARY_API_SECRET=TU_CLOUDINARY_SECRET
+      - CLOUDINARY_BASE_URL=https://res.cloudinary.com/dueikakf8/image/upload/
+      - CLOUDINARY_FOLDER=auth_service/profiles
+      - CLOUDINARY_DEFAULT_AVATAR_FILENAME=avatar-default.png
+      - SMTP_HOST=smtp.gmail.com
+      - SMTP_PORT=587
+      - SMTP_ENABLE_SSL=false
+      - SMTP_USERNAME=olivermerida765@gmail.com
+      - SMTP_PASSWORD=TU_PASSWORD_DE_APP_GMAIL
+      - SMTP_FROM=olivermerida765@gmail.com
+      - SMTP_FROM_NAME=Gestor Restaurante
+    depends_on:
+      restaurante-db:
+        condition: service_healthy
+      restaurante-server-admin:
+        condition: service_started
+ 
+  # 4. API de Administracion (Node.js)
+  restaurante-server-admin:
+    build:
+      context: ../Restaurante-ServerAdmin/server-admin
+      dockerfile: Dockerfile
+    container_name: restaurante-server-admin
+    ports:
+      - "3001:3001"
+    environment:
+      - PORT=3001
+      - URI_MONGODB=mongodb://mongo-db:27017/restaurante_db
+      - SECRETORPRIVATEKEY=Restaurante_Super_Secret_Key_2026_DotNet8
+      - AUTH_SERVICE_URL=http://restaurante-auth-service:8080
+      - SEED_ENABLED=true
+      - CLOUDINARY_CLOUD_NAME=dueikakf8
+      - CLOUDINARY_API_KEY=TU_CLOUDINARY_API_KEY
+      - CLOUDINARY_API_SECRET=TU_CLOUDINARY_SECRET
+    depends_on:
+      mongo-db:
+        condition: service_healthy
+      restaurante-auth-service:
+        condition: service_started
+ 
+  # 4.5. API de Usuarios (Node.js)
+  restaurante-server-user:
+    build:
+      context: ../Restaurante-ServerUser
+      dockerfile: Dockerfile
+    container_name: restaurante-server-user
+    ports:
+      - "3003:3003"
+    environment:
+      - NODE_ENV=production
+      - PORT=3003
+      - URI_MONGODB=mongodb://mongo-db:27017/restaurante_db
+      - SECRETORPRIVATEKEY=Restaurante_Super_Secret_Key_2026_DotNet8
+      - JWT_ISSUER=auth-service
+      - JWT_AUDIENCE=restaurante-app
+      - ADMIN_SERVICE_URL=http://restaurante-server-admin:3001
+      - AUTH_NODE_URL=http://restaurante-auth-node:3007/api/v1
+      - CLOUDINARY_CLOUD_NAME=dueikakf8
+      - CLOUDINARY_API_KEY=TU_CLOUDINARY_API_KEY
+      - CLOUDINARY_API_SECRET=TU_CLOUDINARY_SECRET
+    depends_on:
+      mongo-db:
+        condition: service_healthy
+      restaurante-auth-node:
+        condition: service_started
+      restaurante-server-admin:
+        condition: service_started
+ 
+  # 5. Cliente Admin (React/Vite)
+  restaurante-client-admin:
+    build:
+      context: ../Restaurante-Client-Admin
+      dockerfile: Dockerfile
+      args:
+        - VITE_AUTH_URL=http://localhost:5065/api/v1
+        - VITE_ADMIN_URL=http://localhost:3001/api/v1
+    container_name: restaurante-client-admin
+    ports:
+      - "5173:80"
+    depends_on:
+      - restaurante-auth-service
+      - restaurante-server-admin
+ 
+  # 6. Cliente Usuario (Expo/React Native)
+  restaurante-client-user:
+    build:
+      context: ../Restaurante-Client-User
+      dockerfile: Dockerfile
+    container_name: restaurante-client-user
+    restart: unless-stopped
+    environment:
+      - EXPO_PUBLIC_AUTH_URL=http://10.0.2.2:3007/api/v1/auth
+      - EXPO_PUBLIC_USER_URL=http://10.0.2.2:3003/restauranteUser/v1
+      - REACT_NATIVE_PACKAGER_HOSTNAME=0.0.0.0
+      - EXPO_DEVTOOLS_LISTEN_ADDRESS=0.0.0.0
+      - EXPO_UNSTABLE_HEADLESS=true
+      - CHOKIDAR_USEPOLLING=true
+      - WATCHPACK_POLLING=true
+    volumes:
+      - ../Restaurante-Client-User:/app
+      - /app/node_modules
+    ports:
+      - "8081:8081"
+      - "19000:19000"
+      - "19001:19001"
+      - "19002:19002"
+    depends_on:
+      restaurante-auth-node:
+        condition: service_started
+      restaurante-server-user:
+        condition: service_started
+ 
+volumes:
+  restaurante_db_data:
+  restaurante_mongo_data:
